@@ -1,0 +1,15 @@
+{
+  "name": "DexNum · Aprende la Pokédex",
+  "short_name": "DexNum",
+  "description": "Juego para memorizar el número de Pokédex de todos los Pokémon con repetición espaciada.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#16181f",
+  "theme_color": "#16181f",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
