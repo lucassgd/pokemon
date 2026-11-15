@@ -1,5 +1,5 @@
 // Service worker: la app funciona sin conexión y los sprites ya vistos se guardan en caché.
-const SHELL = 'dexnum-shell-v3';
+const SHELL = 'dexnum-shell-v4';
 const SPRITES = 'dexnum-sprites-v1';
 const FILES = ['./', 'index.html', 'css/style.css', 'js/data.js', 'js/app.js', 'manifest.json', 'icon.svg'];
 

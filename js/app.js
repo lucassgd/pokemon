@@ -825,9 +825,11 @@ function settings() {
       <div class="toggle"><span>Objetivo diario</span>
         <span class="row"><button class="icon-btn" id="gdown">−</button><b>${st.dailyGoal}</b><button class="icon-btn" id="gup">+</button></span></div>
     </div>
-    <div class="muted small">Copia de seguridad del progreso</div>
-    <div class="row"><button class="btn" id="export">Exportar</button><button class="btn" id="import">Importar</button></div>
-    <textarea id="io" class="hidden" placeholder="Pega aquí tu copia de seguridad"></textarea>
+    <div class="muted small">Pasar tu progreso a otro dispositivo (móvil ↔ PC)</div>
+    <button class="btn primary" id="share">📲 Enviar mi progreso</button>
+    <div class="small muted">Crea un enlace con tu progreso. Ábrelo en el otro dispositivo y se juntará con lo que tenga (no se pierde nada de ninguno de los dos).</div>
+    <button class="btn" id="import">📥 Pegar enlace o código</button>
+    <textarea id="io" class="hidden" placeholder="Pega aquí el enlace o el código"></textarea>
     <button class="btn ghost" id="reset" style="color:var(--bad)">Borrar todo el progreso</button>
     <div class="small muted center">Datos: PokeAPI · Pokémon es marca de Nintendo / Game Freak / The Pokémon Company. Proyecto de fans sin ánimo de lucro.</div>`);
   on('#back', home);
@@ -840,20 +842,91 @@ function settings() {
   on('.sw', e => { const t = e.currentTarget.dataset.t; st[t] = !st[t]; save(); settings(); });
   on('#gdown', () => { st.dailyGoal = Math.max(10, st.dailyGoal - 10); save(); settings(); });
   on('#gup', () => { st.dailyGoal = Math.min(500, st.dailyGoal + 10); save(); settings(); });
-  on('#export', () => {
-    const io = $('#io'); io.classList.remove('hidden'); io.value = btoa(unescape(encodeURIComponent(JSON.stringify(S))));
-    io.select(); try { navigator.clipboard.writeText(io.value); } catch (e) { /* copia manual */ }
-  });
+  on('#share', shareProgress);
   on('#import', () => {
     const io = $('#io');
     if (io.classList.contains('hidden') || !io.value.trim()) { io.classList.remove('hidden'); io.value = ''; io.focus(); return; }
-    try {
-      const s = JSON.parse(decodeURIComponent(escape(atob(io.value.trim()))));
-      if (s.v !== 1 || typeof s.cards !== 'object') throw new Error('formato');
-      localStorage.setItem(KEY, JSON.stringify(s)); S = load(); alert('Progreso importado ✔'); home();
-    } catch (e) { alert('Ese texto no es una copia válida.'); }
+    receiveProgress(io.value.trim());
   });
   on('#reset', () => { if (confirm('¿Seguro? Se borrará todo tu progreso.')) { S = defaultState(); save(); home(); } });
+}
+
+/* ---------- Pasar el progreso entre dispositivos ---------- */
+// Sin servidor: el progreso va comprimido dentro de un enlace (…/#sync=…). Al abrirlo en el
+// otro dispositivo se combina con lo que ya hubiera allí.
+const b64url = bytes => { let s = ''; bytes.forEach(c => { s += String.fromCharCode(c); }); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64url = str => Uint8Array.from(atob(str.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+async function streamBytes(bytes, stream) {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+async function packState() {
+  const json = new TextEncoder().encode(JSON.stringify(S));
+  if (window.CompressionStream) return 'z' + b64url(await streamBytes(json, new CompressionStream('deflate-raw')));
+  return 'j' + b64url(json);
+}
+async function unpackState(code) {
+  const m = code.match(/sync=([A-Za-z0-9_-]+)/);
+  if (m) code = m[1];
+  code = code.replace(/\s+/g, '');
+  let bytes;
+  if (code[0] === 'z') bytes = await streamBytes(unb64url(code.slice(1)), new DecompressionStream('deflate-raw'));
+  else if (code[0] === 'j') bytes = unb64url(code.slice(1));
+  else bytes = new TextEncoder().encode(decodeURIComponent(escape(atob(code)))); // copias antiguas
+  const s = JSON.parse(new TextDecoder().decode(bytes));
+  if (s.v !== 1 || typeof s.cards !== 'object') throw new Error('formato');
+  return s;
+}
+function mergeState(o) {
+  // Por cada Pokémon se queda la ficha con más respuestas (la más trabajada).
+  const tries = c => (c ? c.ok + c.ko : -1);
+  for (const [id, c] of Object.entries(o.cards || {})) if (tries(c) > tries(S.cards[id])) S.cards[id] = c;
+  S.known = { ...(o.known || {}), ...S.known };
+  S.unknown = { ...(o.unknown || {}), ...(S.unknown || {}) };
+  for (const id in S.known) delete S.unknown[id];
+  const a = S.stats, b = { ...defaultState().stats, ...(o.stats || {}) };
+  const best = Math.max(a.bestTime, b.bestTime);
+  if (b.answers > a.answers) S.stats = { ...b };
+  S.stats.bestTime = best;
+  save();
+}
+const summary = s => `${Object.keys(s.cards || {}).length} aprendidos · ${Object.keys(s.known || {}).length} en «¿Quién es?»`;
+
+async function shareProgress() {
+  let url;
+  try { url = location.href.split('#')[0] + '#sync=' + await packState(); }
+  catch (e) { alert('No se pudo crear el enlace en este navegador.'); return; }
+  const m = $('#modal');
+  m.innerHTML = `<div class="box panel">
+    <b>📲 Enviar mi progreso</b>
+    <p class="small muted">${summary(S)}</p>
+    <p class="small">Mándate este enlace (WhatsApp, Telegram, correo…) y ábrelo en el otro dispositivo.</p>
+    <textarea id="slink" readonly>${url}</textarea>
+    <div class="row" style="margin-top:10px">
+      ${navigator.share ? '<button class="btn primary" id="sshare">Compartir</button>' : ''}
+      <button class="btn" id="scopy">Copiar</button>
+    </div>
+    <button class="btn ghost" id="mclose" style="margin-top:8px">Cerrar</button></div>`;
+  m.classList.remove('hidden');
+  const close = () => m.classList.add('hidden');
+  m.onclick = e => { if (e.target === m || e.target.id === 'mclose') close(); };
+  m.querySelector('#scopy').onclick = async e => {
+    const t = m.querySelector('#slink'); t.select();
+    try { await navigator.clipboard.writeText(url); } catch (err) { document.execCommand('copy'); }
+    e.target.textContent = 'Copiado ✔';
+  };
+  const sh = m.querySelector('#sshare');
+  if (sh) sh.onclick = () => navigator.share({ title: 'Mi progreso DexNum', url }).catch(() => {});
+}
+
+async function receiveProgress(code) {
+  let o;
+  try { o = await unpackState(code); }
+  catch (e) { alert('Ese enlace o código no es válido (¿se ha copiado entero?).'); return false; }
+  if (!confirm(`¿Añadir el progreso recibido a este dispositivo?\n\nRecibido: ${summary(o)}\nAquí: ${summary(S)}\n\nSe juntan los dos; no se pierde nada.`)) return false;
+  mergeState(o);
+  alert(`Progreso añadido ✔\nAhora tienes: ${summary(S)}`);
+  home();
+  return true;
 }
 
 /* ---------- Ayuda ---------- */
@@ -875,4 +948,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && ap
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
-home();
+function checkSyncLink() {
+  if (!location.hash.startsWith('#sync=')) return false;
+  const code = location.hash.slice(1);
+  history.replaceState(null, '', location.pathname + location.search);
+  home();
+  receiveProgress(code);
+  return true;
+}
+window.addEventListener('hashchange', checkSyncLink);
+if (!checkSyncLink()) home();
