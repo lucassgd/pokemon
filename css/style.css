@@ -191,3 +191,16 @@ textarea { width: 100%; min-height: 90px; background: var(--panel2); color: var(
 .combo { color: var(--warn); font-weight: 800; }
 .spacer { flex: 1; }
 .row > .btn { width: auto; flex: 1; }
+
+/* ¿Cuántos conoces? */
+.kin { flex: 1; min-width: 0; height: 54px; border-radius: 14px; border: 2px solid var(--line); background: var(--panel2); color: var(--text); font: 600 18px system-ui, sans-serif; padding: 0 14px; outline: none; user-select: text; -webkit-user-select: text; }
+.kin:focus { border-color: var(--blue); }
+.icon-btn.ok { width: 54px; height: 54px; background: var(--ok); color: #05210f; font-weight: 900; }
+.kfb { min-height: 20px; }
+.kfb.ok { color: #86efac; }
+.kfb.bad { color: #fca5a5; }
+.kfb.warn { color: #fde68a; }
+.kgens { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; text-align: center; }
+.kgens b { display: block; font-size: 18px; }
+.kgens small { color: var(--muted); font-size: 12px; }
+.kin.shake { animation: shake .35s; border-color: var(--bad); }

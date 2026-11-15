@@ -48,6 +48,7 @@ function defaultState() {
   return {
     v: 1,
     cards: {},             // id -> { b: nivel, d: próxima fecha, ok, ko }
+    known: {},             // modo «¿Cuántos conoces?»: id -> 1 si lo has nombrado
     settings: { gens: [1, 2, 3, 4, 5, 6, 7, 8, 9], sound: true, vibrate: true, dailyGoal: 50 },
     stats: { streak: 0, lastDay: null, todayDate: null, today: 0, answers: 0, correct: 0, bestTime: 0 },
   };
@@ -220,6 +221,12 @@ function home() {
     <div class="strip">${nb.ids.map(id => `<div class="mini">${img(id, '')}${id}</div>`).join('')}</div>`
     : `<div class="panel center">🏆 ¡Has visto todos los Pokémon de las generaciones elegidas!</div>`}
 
+    <button class="btn big" id="known">
+      <span class="emo">🧠</span>
+      <span>¿Cuántos conoces? · ${Object.keys(S.known).length}/${N}
+        <span class="sub">Escribe todos los nombres que recuerdes</span></span>
+    </button>
+
     <div class="grid2">
       <button class="btn" id="time"><span class="emo">⏱️</span>Contrarreloj<span class="sub">Récord: ${st.bestTime}</span></button>
       <button class="btn" id="practice"><span class="emo">🎯</span>Práctica libre<span class="sub">Sin afectar repasos</span></button>
@@ -234,6 +241,7 @@ function home() {
   on('#practice', practiceMenu);
   on('#map', () => dexMap(0));
   on('#help', help);
+  on('#known', knownGame);
 }
 
 /* ---------- Presentación de un bloque ---------- */
@@ -632,6 +640,154 @@ function showDetail(id) {
   m.onclick = e => { if (e.target === m || e.target.id === 'mclose') close(); };
 }
 
+/* ---------- ¿Cuántos conoces? ---------- */
+// Escribe nombres de memoria. No hace falta escribirlos perfectos: se acepta si se parece
+// al menos un ~80 % (p. ej. «oikologne» → Oinkologne) y se te enseña cómo se escribe.
+const norm = s => s.toLowerCase().replace(/♀/g, 'f').replace(/♂/g, 'm')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+const NAME_KEYS = POKEDEX.map((p, i) => ({ id: i + 1, keys: [...new Set([p[0], p[5]].filter(Boolean).map(norm))] }));
+// Nombres que la gente suele escribir sin el sexo: «nidoran» vale para el que te falte.
+const EXTRA_KEYS = { 29: ['nidoran', 'nidoranhembra'], 32: ['nidoran', 'nidoranmacho'] };
+NAME_KEYS.forEach(e => { if (EXTRA_KEYS[e.id]) e.keys.push(...EXTRA_KEYS[e.id]); });
+
+function editDistance(a, b, max) {
+  // Damerau-Levenshtein (las letras cambiadas de sitio cuentan como 1 error).
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let rowMin = Infinity;
+    for (let j = 1; j <= b.length; j++) {
+      const c = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      rowMin = Math.min(rowMin, d[i][j]);
+    }
+    if (rowMin > max) return max + 1;
+  }
+  return d[a.length][b.length];
+}
+// Errores permitidos: ~20 % de las letras (nombres de 3 letras, exactos; de 4–9, 1 fallo; de 10+, 2…).
+const allowedErrors = len => (len <= 3 ? 0 : Math.max(1, Math.floor(len * 0.2)));
+
+function matchName(raw) {
+  const q = norm(raw);
+  if (!q) return null;
+  const known = id => !!S.known[id];
+  let best = null;
+  for (const e of NAME_KEYS) for (const k of e.keys) {
+    const max = allowedErrors(Math.max(k.length, q.length));
+    const dist = k === q ? 0 : editDistance(q, k, max);
+    if (dist > max) continue;
+    // Prioridad: menos errores; a igualdad, los que aún no tienes.
+    const score = dist * 2 + (known(e.id) ? 1 : 0);
+    if (!best || score < best.score) best = { id: e.id, dist, score, known: known(e.id) };
+  }
+  return best;
+}
+
+function knownGame() {
+  stopTimer();
+  keyHandler = null;
+  const count = () => Object.keys(S.known).length;
+  const recent = () => (S.knownLog || []).slice(-12).reverse();
+  const genStats = () => GENS.map(([a, b], i) => {
+    const n = range(a, b).filter(id => S.known[id]).length;
+    return `<div><b>${n}<span class="muted">/${b - a + 1}</span></b><small>Gen ${i + 1}</small></div>`;
+  }).join('');
+  const li = id => `<div class="li">${img(id, '')}<span class="n">${fmt(id)}</span><span class="nm">${nameOf(id)}</span></div>`;
+
+  render(`
+    <div class="top"><button class="icon-btn" id="back">←</button><h2>¿Cuántos conoces?</h2></div>
+    <div class="panel center">
+      <div class="big-score" id="kcount">${count()}</div>
+      <div class="muted">de ${N} Pokémon</div>
+      <div class="bar" style="margin-top:10px"><i id="kbar" style="width:${100 * count() / N}%;background:var(--ok)"></i></div>
+    </div>
+    <div class="row">
+      <input id="kin" class="kin" type="text" placeholder="Escribe un Pokémon…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done">
+      <button class="icon-btn ok" id="kok" aria-label="Comprobar">✓</button>
+    </div>
+    <div id="kfb" class="kfb muted small">No hace falta escribirlo perfecto: si se parece lo suficiente, vale.</div>
+    <div class="panel"><div class="kgens" id="kgens">${genStats()}</div></div>
+    <div class="list" id="klist">${recent().map(li).join('')}</div>
+    <div class="row">
+      <button class="btn" id="kmap">Ver mi lista</button>
+      <button class="btn ghost" id="kreset" style="color:var(--bad)">Empezar de 0</button>
+    </div>`);
+
+  const input = $('#kin'), fb = $('#kfb');
+  const accept = (id, typed, dist) => {
+    S.known[id] = 1;
+    (S.knownLog = S.knownLog || []).push(id);
+    if (S.knownLog.length > 50) S.knownLog = S.knownLog.slice(-50);
+    save();
+    beep(true);
+    $('#kcount').textContent = count();
+    $('#kbar').style.width = `${100 * count() / N}%`;
+    $('#kgens').innerHTML = genStats();
+    $('#klist').innerHTML = recent().map(li).join('');
+    const p = P(id);
+    fb.className = 'kfb ok';
+    fb.innerHTML = `✔ <b>${p[0]}</b> ${fmt(id)}${dist ? ` · se escribe <b>${p[0]}</b>${p[5] ? ` (${p[5]})` : ''}, tú pusiste «${escapeHtml(typed)}»` : ''}`;
+    input.value = '';
+    input.classList.remove('shake');
+  };
+  const submit = () => {
+    const typed = input.value.trim();
+    if (!typed) return;
+    const m = matchName(typed);
+    if (m && !m.known) return accept(m.id, typed, m.dist);
+    input.select();
+    if (m) {
+      fb.className = 'kfb warn';
+      fb.innerHTML = `Ya tenías a <b>${nameOf(m.id)}</b> ${fmt(m.id)}`;
+      input.value = '';
+      input.classList.remove('shake');
+    } else {
+      beep(false);
+      fb.className = 'kfb bad';
+      fb.innerHTML = `✗ No reconozco «${escapeHtml(typed)}»`;
+      input.classList.remove('shake'); void input.offsetWidth; input.classList.add('shake');
+    }
+  };
+  // Si lo escribes exacto, se acepta solo (salvo que pueda ser el principio de otro: Mew → Mewtwo).
+  input.addEventListener('input', () => {
+    const q = norm(input.value);
+    if (q.length < 3) return;
+    const exact = NAME_KEYS.find(e => !S.known[e.id] && e.keys.includes(q));
+    if (!exact) return;
+    const longer = NAME_KEYS.some(e => !S.known[e.id] && e.id !== exact.id && e.keys.some(k => k.length > q.length && k.startsWith(q)));
+    if (!longer) accept(exact.id, input.value, 0);
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  on('#kok', () => { submit(); input.focus(); });
+  on('#back', home);
+  on('#kmap', () => knownMap(0));
+  on('#kreset', () => {
+    if (confirm('¿Borrar la lista de Pokémon que conoces y empezar de 0? (Tu progreso de números no se toca.)')) {
+      S.known = {}; S.knownLog = []; save(); knownGame();
+    }
+  });
+  input.focus();
+}
+const escapeHtml = s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function knownMap(g) {
+  const [a, b] = GENS[g];
+  const ids = range(a, b);
+  const n = ids.filter(id => S.known[id]).length;
+  render(`
+    <div class="top"><button class="icon-btn" id="back">←</button><h2>Los que conoces</h2></div>
+    <div class="tabs">${GENS.map((_, i) => `<button class="tab ${i === g ? 'on' : ''}" data-g="${i}">Gen ${i + 1}</button>`).join('')}</div>
+    <div class="row small"><span class="grow"><b>${GEN_REGION[g]}</b> ${fmt(a)}–${fmt(b)}</span><span class="muted">${n}/${ids.length} conocidos</span></div>
+    <div class="small muted">Toca uno que te falte para ver quién es (no cuenta como acertado).</div>
+    <div class="dexgrid">${ids.map(id => `<button class="cell ${S.known[id] ? 'l4' : 'l0'}" data-id="${id}">${img(id, '')}<span>${id}</span></button>`).join('')}</div>`);
+  on('#back', knownGame);
+  on('.tab', e => knownMap(+e.currentTarget.dataset.g));
+  on('.cell', e => showDetail(+e.currentTarget.dataset.id));
+}
+
 /* ---------- Ajustes ---------- */
 function settings() {
   const st = S.settings;
@@ -684,6 +840,7 @@ function help() {
     <div class="panel"><b>💪 2. Practica justo después</b><p class="muted small">Primero reconoces (elegir entre 4), luego recuerdas (teclear el número). Recordar sin ayuda es lo que fija la memoria. Lo que falles vuelve a salir en la misma sesión.</p></div>
     <div class="panel"><b>🔁 3. Repasa cuando toca</b><p class="muted small">Repetición espaciada: cada acierto sube de nivel al Pokémon y lo aleja (4 h → 1 día → 3 días → 1 semana → 16 días → 40 días). Cada fallo lo hace volver antes. Desde el nivel 4 se considera dominado.</p></div>
     <div class="panel"><b>🗓️ Consejo</b><p class="muted small">Haz primero los repasos pendientes y luego un bloque nuevo (o dos). 10 minutos al día > 2 horas un domingo. A ese ritmo te sabes los 1025 en unos 3–4 meses.</p></div>
+    <div class="panel"><b>🧠 ¿Cuántos conoces?</b><p class="muted small">Escribe de memoria todos los Pokémon que recuerdes y mira cuántos de los 1025 conoces. No hace falta escribirlos perfectos: si aciertas más o menos el 80 % de las letras, vale, y te enseña cómo se escriben de verdad.</p></div>
     <div class="panel"><b>⏱️ Contrarreloj y 🎯 Práctica</b><p class="muted small">Para jugar y medirte. No cambian tu calendario de repasos.</p></div>
     <button class="btn primary" id="back2">¡Entendido!</button>`);
   on('#back', home); on('#back2', home);
