@@ -204,3 +204,6 @@ textarea { width: 100%; min-height: 90px; background: var(--panel2); color: var(
 .kgens b { display: block; font-size: 18px; }
 .kgens small { color: var(--muted); font-size: 12px; }
 .kin.shake { animation: shake .35s; border-color: var(--bad); }
+.cell.kx { background: #5a1d1d; }
+.kq { padding: 8px 0 0; }
+.kq .spr { width: 180px; height: 180px; margin: -10px auto -14px; }

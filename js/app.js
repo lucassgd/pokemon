@@ -224,7 +224,7 @@ function home() {
     <button class="btn big" id="known">
       <span class="emo">🧠</span>
       <span>¿Cuántos conoces? · ${Object.keys(S.known).length}/${N}
-        <span class="sub">Escribe todos los nombres que recuerdes</span></span>
+        <span class="sub">Sale la imagen y escribes el nombre</span></span>
     </button>
 
     <div class="grid2">
@@ -670,12 +670,12 @@ function editDistance(a, b, max) {
 // Errores permitidos: ~20 % de las letras (nombres de 3 letras, exactos; de 4–9, 1 fallo; de 10+, 2…).
 const allowedErrors = len => (len <= 3 ? 0 : Math.max(1, Math.floor(len * 0.2)));
 
-function matchName(raw) {
+function matchName(raw, target = 0) {
   const q = norm(raw);
   if (!q) return null;
   const known = id => !!S.known[id];
   let best = null;
-  for (const e of NAME_KEYS) for (const k of e.keys) {
+  for (const e of (target ? [NAME_KEYS[target - 1]] : NAME_KEYS)) for (const k of e.keys) {
     const max = allowedErrors(Math.max(k.length, q.length));
     const dist = k === q ? 0 : editDistance(q, k, max);
     if (dist > max) continue;
@@ -687,89 +687,113 @@ function matchName(raw) {
 }
 
 function knownGame() {
+  // Sale la imagen de un Pokémon y escribes su nombre. Recorre los 1025 en orden aleatorio
+  // (o solo una generación) y al final sabes cuántos conoces.
   stopTimer();
   keyHandler = null;
-  const count = () => Object.keys(S.known).length;
-  const recent = () => (S.knownLog || []).slice(-12).reverse();
-  const genStats = () => GENS.map(([a, b], i) => {
-    const n = range(a, b).filter(id => S.known[id]).length;
-    return `<div><b>${n}<span class="muted">/${b - a + 1}</span></b><small>Gen ${i + 1}</small></div>`;
-  }).join('');
-  const li = id => `<div class="li">${img(id, '')}<span class="n">${fmt(id)}</span><span class="nm">${nameOf(id)}</span></div>`;
+  S.unknown = S.unknown || {};
+  const scope = S.knownScope || 0; // 0 = todos, 1–9 = generación
+  const pool = scope ? range(...GENS[scope - 1]) : range(1, N);
+  const answered = id => S.known[id] || S.unknown[id];
+  const nKnown = () => pool.filter(id => S.known[id]).length;
+  const nDone = () => pool.filter(answered).length;
+  const nextId = () => { const left = pool.filter(id => !answered(id)); return left.length ? pick(left) : 0; };
+  let id = nextId(), tries = 0, locked = false;
+
+  const drawCounts = () => {
+    $('#kcount').innerHTML = `${nKnown()}<span class="muted" style="font-size:28px">/${pool.length}</span>`;
+    $('#kbar').innerHTML = `<i style="width:${100 * nKnown() / pool.length}%;background:var(--ok)"></i><i style="width:${100 * (nDone() - nKnown()) / pool.length}%;background:var(--bad)"></i>`;
+    $('#kdone').textContent = `${nDone()} vistos · ${nDone() - nKnown()} no los sabías`;
+  };
 
   render(`
-    <div class="top"><button class="icon-btn" id="back">←</button><h2>¿Cuántos conoces?</h2></div>
-    <div class="panel center">
-      <div class="big-score" id="kcount">${count()}</div>
-      <div class="muted">de ${N} Pokémon</div>
-      <div class="bar" style="margin-top:10px"><i id="kbar" style="width:${100 * count() / N}%;background:var(--ok)"></i></div>
+    <div class="top"><button class="icon-btn" id="back">←</button><h2>¿Quién es?</h2><button class="icon-btn" id="kmap" aria-label="Mi lista">📋</button></div>
+    <div class="tabs">${['Todos', ...GENS.map((_, i) => `Gen ${i + 1}`)].map((l, i) => `<button class="tab ${i === scope ? 'on' : ''}" data-s="${i}">${l}</button>`).join('')}</div>
+    <div class="panel center" style="padding:12px">
+      <div class="row"><span class="grow" style="text-align:left"><b id="kcount" style="font-size:36px;font-weight:900"></b></span><span class="small muted" id="kdone"></span></div>
+      <div class="bar" id="kbar" style="margin-top:8px"></div>
     </div>
-    <div class="row">
-      <input id="kin" class="kin" type="text" placeholder="Escribe un Pokémon…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done">
-      <button class="icon-btn ok" id="kok" aria-label="Comprobar">✓</button>
-    </div>
-    <div id="kfb" class="kfb muted small">No hace falta escribirlo perfecto: si se parece lo suficiente, vale.</div>
-    <div class="panel"><div class="kgens" id="kgens">${genStats()}</div></div>
-    <div class="list" id="klist">${recent().map(li).join('')}</div>
-    <div class="row">
-      <button class="btn" id="kmap">Ver mi lista</button>
-      <button class="btn ghost" id="kreset" style="color:var(--bad)">Empezar de 0</button>
-    </div>`);
+    <div id="kstage"></div>`);
 
-  const input = $('#kin'), fb = $('#kfb');
-  const accept = (id, typed, dist) => {
-    S.known[id] = 1;
-    (S.knownLog = S.knownLog || []).push(id);
-    if (S.knownLog.length > 50) S.knownLog = S.knownLog.slice(-50);
-    save();
-    beep(true);
-    $('#kcount').textContent = count();
-    $('#kbar').style.width = `${100 * count() / N}%`;
-    $('#kgens').innerHTML = genStats();
-    $('#klist').innerHTML = recent().map(li).join('');
-    const p = P(id);
-    fb.className = 'kfb ok';
-    fb.innerHTML = `✔ <b>${p[0]}</b> ${fmt(id)}${dist ? ` · se escribe <b>${p[0]}</b>${p[5] ? ` (${p[5]})` : ''}, tú pusiste «${escapeHtml(typed)}»` : ''}`;
-    input.value = '';
-    input.classList.remove('shake');
-  };
-  const submit = () => {
-    const typed = input.value.trim();
-    if (!typed) return;
-    const m = matchName(typed);
-    if (m && !m.known) return accept(m.id, typed, m.dist);
-    input.select();
-    if (m) {
-      fb.className = 'kfb warn';
-      fb.innerHTML = `Ya tenías a <b>${nameOf(m.id)}</b> ${fmt(m.id)}`;
-      input.value = '';
+  const stage = $('#kstage');
+  const drawQuestion = () => {
+    locked = false; tries = 0;
+    if (!id) {
+      const pct = Math.round(100 * nKnown() / pool.length);
+      stage.innerHTML = `<div class="panel center"><div class="big-score">${pct}%</div>
+        <div style="margin-top:8px;font-weight:700">¡Terminado! Conoces ${nKnown()} de ${pool.length} 🎉</div>
+        <div class="small muted" style="margin-top:6px">Mira en 📋 los que no sabías, o vuelve a intentarlo con ellos.</div></div>
+        <button class="btn orange" id="kretry" ${nDone() - nKnown() ? '' : 'disabled'}>Reintentar los que no sabía</button>
+        <button class="btn ghost" id="kreset" style="color:var(--bad)">Empezar de 0</button>`;
+      bindEnd();
+      return;
+    }
+    stage.innerHTML = `
+      <div class="prompt kq">${img(id)}</div>
+      <div class="row" style="margin-top:12px">
+        <input id="kin" class="kin" type="text" placeholder="¿Cómo se llama?" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+        <button class="icon-btn ok" id="kok" aria-label="Comprobar">✓</button>
+      </div>
+      <div id="kfb" class="kfb muted small" style="margin:10px 0">No hace falta escribirlo perfecto: si se parece, vale.</div>
+      <div class="row"><button class="btn" id="kskip">🤷 No lo sé</button></div>
+      <button class="btn ghost small" id="kreset" style="color:var(--bad);min-height:40px;margin-top:8px">Empezar de 0</button>`;
+    const input = $('#kin'), fb = $('#kfb');
+    const reveal = (ok, typed, dist) => {
+      locked = true;
+      const p = P(id);
+      if (ok) { S.known[id] = 1; delete S.unknown[id]; } else S.unknown[id] = 1;
+      save(); beep(ok); drawCounts();
+      stage.querySelector('.kq').classList.add('shown');
+      fb.className = `kfb ${ok ? 'ok' : 'bad'}`;
+      fb.innerHTML = `${ok ? '✔' : '✗ Era'} <b>${p[0]}</b>${p[5] ? ` (${p[5]})` : ''} · ${fmt(id)}`
+        + (ok && dist ? `<br><span class="muted">Se escribe <b>${p[0]}</b>, tú pusiste «${escapeHtml(typed)}»</span>` : '');
+      input.value = ok ? p[0] : input.value;
+      input.readOnly = true;
       input.classList.remove('shake');
-    } else {
+      const skip = $('#kskip');
+      skip.textContent = 'Siguiente ▶'; skip.classList.add('primary');
+      setTimeout(() => { if (input.isConnected && ok && !dist) goNext(); }, 900);
+    };
+    const goNext = () => { if (!$('#kin') || $('#kin') !== input) return; id = nextId(); drawQuestion(); };
+    const submit = () => {
+      if (locked) return goNext();
+      const typed = input.value.trim();
+      if (!typed) return;
+      const m = matchName(typed, id);
+      if (m) return reveal(true, typed, m.dist);
+      tries++;
       beep(false);
+      const other = matchName(typed);
       fb.className = 'kfb bad';
-      fb.innerHTML = `✗ No reconozco «${escapeHtml(typed)}»`;
+      fb.innerHTML = other && other.id !== id
+        ? `No, ese es otro (${nameOf(other.id)}). Prueba otra vez.`
+        : `✗ No es «${escapeHtml(typed)}». ${tries >= 2 ? 'Si no lo sabes, pulsa «No lo sé».' : 'Prueba otra vez.'}`;
       input.classList.remove('shake'); void input.offsetWidth; input.classList.add('shake');
+      input.select();
+    };
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    on('#kok', () => { submit(); $('#kin')?.focus(); });
+    on('#kskip', () => { if (locked) goNext(); else reveal(false); $('#kin')?.focus(); });
+    on('#kreset', resetKnown);
+    input.focus();
+    // Precarga del siguiente sprite probable
+    new Image().src = SPRITE(nextId() || 1);
+  };
+  const resetKnown = () => {
+    if (confirm(`¿Borrar tus respuestas de ${scope ? 'la Gen ' + scope : 'todos'} y empezar de 0? (Tu progreso de números no se toca.)`)) {
+      pool.forEach(x => { delete S.known[x]; delete S.unknown[x]; }); save(); knownGame();
     }
   };
-  // Si lo escribes exacto, se acepta solo (salvo que pueda ser el principio de otro: Mew → Mewtwo).
-  input.addEventListener('input', () => {
-    const q = norm(input.value);
-    if (q.length < 3) return;
-    const exact = NAME_KEYS.find(e => !S.known[e.id] && e.keys.includes(q));
-    if (!exact) return;
-    const longer = NAME_KEYS.some(e => !S.known[e.id] && e.id !== exact.id && e.keys.some(k => k.length > q.length && k.startsWith(q)));
-    if (!longer) accept(exact.id, input.value, 0);
-  });
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
-  on('#kok', () => { submit(); input.focus(); });
+  const bindEnd = () => {
+    on('#kreset', resetKnown);
+    on('#kretry', () => { pool.forEach(x => delete S.unknown[x]); save(); knownGame(); });
+  };
+
+  drawCounts();
+  drawQuestion();
   on('#back', home);
-  on('#kmap', () => knownMap(0));
-  on('#kreset', () => {
-    if (confirm('¿Borrar la lista de Pokémon que conoces y empezar de 0? (Tu progreso de números no se toca.)')) {
-      S.known = {}; S.knownLog = []; save(); knownGame();
-    }
-  });
-  input.focus();
+  on('#kmap', () => knownMap(Math.max(0, scope - 1)));
+  on('.tab', e => { S.knownScope = +e.currentTarget.dataset.s; save(); knownGame(); });
 }
 const escapeHtml = s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -781,8 +805,8 @@ function knownMap(g) {
     <div class="top"><button class="icon-btn" id="back">←</button><h2>Los que conoces</h2></div>
     <div class="tabs">${GENS.map((_, i) => `<button class="tab ${i === g ? 'on' : ''}" data-g="${i}">Gen ${i + 1}</button>`).join('')}</div>
     <div class="row small"><span class="grow"><b>${GEN_REGION[g]}</b> ${fmt(a)}–${fmt(b)}</span><span class="muted">${n}/${ids.length} conocidos</span></div>
-    <div class="small muted">Toca uno que te falte para ver quién es (no cuenta como acertado).</div>
-    <div class="dexgrid">${ids.map(id => `<button class="cell ${S.known[id] ? 'l4' : 'l0'}" data-id="${id}">${img(id, '')}<span>${id}</span></button>`).join('')}</div>`);
+    <div class="legend"><span><i style="background:#166534"></i>Lo sabías</span><span><i style="background:#5a1d1d"></i>No lo sabías</span><span><i style="background:var(--panel)"></i>Aún no ha salido</span></div>
+    <div class="dexgrid">${ids.map(id => `<button class="cell ${S.known[id] ? 'l4' : (S.unknown || {})[id] ? 'kx' : 'l0'}" data-id="${id}">${img(id, '')}<span>${id}</span></button>`).join('')}</div>`);
   on('#back', knownGame);
   on('.tab', e => knownMap(+e.currentTarget.dataset.g));
   on('.cell', e => showDetail(+e.currentTarget.dataset.id));
@@ -840,7 +864,7 @@ function help() {
     <div class="panel"><b>💪 2. Practica justo después</b><p class="muted small">Primero reconoces (elegir entre 4), luego recuerdas (teclear el número). Recordar sin ayuda es lo que fija la memoria. Lo que falles vuelve a salir en la misma sesión.</p></div>
     <div class="panel"><b>🔁 3. Repasa cuando toca</b><p class="muted small">Repetición espaciada: cada acierto sube de nivel al Pokémon y lo aleja (4 h → 1 día → 3 días → 1 semana → 16 días → 40 días). Cada fallo lo hace volver antes. Desde el nivel 4 se considera dominado.</p></div>
     <div class="panel"><b>🗓️ Consejo</b><p class="muted small">Haz primero los repasos pendientes y luego un bloque nuevo (o dos). 10 minutos al día > 2 horas un domingo. A ese ritmo te sabes los 1025 en unos 3–4 meses.</p></div>
-    <div class="panel"><b>🧠 ¿Cuántos conoces?</b><p class="muted small">Escribe de memoria todos los Pokémon que recuerdes y mira cuántos de los 1025 conoces. No hace falta escribirlos perfectos: si aciertas más o menos el 80 % de las letras, vale, y te enseña cómo se escriben de verdad.</p></div>
+    <div class="panel"><b>🧠 ¿Cuántos conoces?</b><p class="muted small">Sale la imagen de un Pokémon y escribes cómo se llama. Al terminar sabes cuántos de los 1025 conoces (o de una generación). No hace falta escribirlos perfectos: si aciertas más o menos el 80 % de las letras, vale, y te enseña cómo se escriben de verdad.</p></div>
     <div class="panel"><b>⏱️ Contrarreloj y 🎯 Práctica</b><p class="muted small">Para jugar y medirte. No cambian tu calendario de repasos.</p></div>
     <button class="btn primary" id="back2">¡Entendido!</button>`);
   on('#back', home); on('#back2', home);
